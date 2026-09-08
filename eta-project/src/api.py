@@ -155,5 +155,5 @@ def get_journey(train_number: str, sim_date: str):
 
     return {
         "data": results,
-        "origin_departure": origin_depx
+        "origin_departure": origin_dep
     }
