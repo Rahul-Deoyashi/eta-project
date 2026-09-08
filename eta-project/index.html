@@ -1,159 +1,440 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="dark">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Train ETA Predictor</title>
-  <style>
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      max-width: 600px;
-      margin: 40px auto;
-      padding: 0 20px;
-      color: #333;
-    }
-    .card {
-      border: 1px solid #e1e4e8;
-      border-radius: 8px;
-      padding: 24px;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
-    }
-    .form-group {
-      margin-bottom: 16px;
-    }
-    label {
-      display: block;
-      margin-bottom: 6px;
-      font-weight: 600;
-    }
-    input, select, button {
-      width: 100%;
-      padding: 10px;
-      border: 1px solid #ccc;
-      border-radius: 6px;
-      box-sizing: border-box;
-      font-size: 14px;
-    }
-    button {
-      background-color: #0066cc;
-      color: white;
-      font-weight: bold;
-      border: none;
-      cursor: pointer;
-      margin-top: 8px;
-    }
-    button:disabled {
-      background-color: #a0c4e8;
-      cursor: not-allowed;
-    }
-    #status {
-      margin-top: 16px;
-      font-size: 14px;
-      color: #666;
-    }
-    #result {
-      margin-top: 20px;
-      background: #f6f8fa;
-      padding: 16px;
-      border-radius: 6px;
-      border-left: 4px solid #0066cc;
-      display: none;
-      white-space: pre-wrap;
-      word-break: break-all;
-    }
-  </style>
-</head>
-<body>
-
-  <div class="card">
-    <h2>Train ETA Predictor</h2>
-    <div id="status">Connecting to backend server...</div>
-
-    <form id="journey-form" style="margin-top: 16px;">
-      <div class="form-group">
-        <label for="train_number">Train Number:</label>
-        <input type="text" id="train_number" placeholder="e.g. 12345" required>
-      </div>
-
-      <div class="form-group">
-        <label for="sim_date">Simulation Date:</label>
-        <input type="date" id="sim_date" required>
-      </div>
-
-      <button type="submit" id="submit-btn" disabled>Calculate ETA</button>
-    </form>
-
-    <div id="result"></div>
-  </div>
-
-  <script>
-    // ⚠️ REPLACE THIS WITH YOUR ACTUAL RENDER BACKEND URL:
-    const API_BASE_URL = "https://YOUR-RENDER-SERVICE-NAME.onrender.com";
-
-    const statusDiv = document.getElementById('status');
-    const submitBtn = document.getElementById('submit-btn');
-    const resultDiv = document.getElementById('result');
-    const form = document.getElementById('journey-form');
-
-    // 1. Fetch controls / verify backend is awake when the page loads
-    async function initControls() {
-      statusDiv.textContent = "Connecting to backend... (If server was sleeping, this may take up to 40s)";
-      try {
-        const response = await fetch(`${API_BASE_URL}/api/controls`);
-        if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
-        const data = await response.json();
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dynamic ETA Forecast | SIH</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=VT323&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = { darkMode: 'class', theme: { extend: { fontFamily: { sans: ['"Plus Jakarta Sans"', 'sans-serif'] } } } }
+    </script>
+    <style>
+        body { background-color: #090d16; color: #f8fafc; overflow-x: hidden; }
+        .glass-card { background: rgba(15, 23, 42, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(51, 65, 85, 0.5); border-radius: 12px; }
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #0f172a; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
        
-        statusDiv.textContent = "Backend connected successfully!";
-        statusDiv.style.color = "green";
-        submitBtn.disabled = false;
-        console.log("Controls loaded:", data);
-      } catch (error) {
-        console.error("Error fetching controls:", error);
-        statusDiv.textContent = "Error connecting to backend API. Please check your Render URL and browser console.";
-        statusDiv.style.color = "red";
-      }
-    }
+        #map { height: 420px; width: 100%; border-radius: 12px; background: #0f172a; z-index: 10;}
+       
+        /* FREE DARK MODE MAP HACK: Inverts the free standard OSM tiles */
+        .leaflet-layer, .leaflet-control-zoom-in, .leaflet-control-zoom-out, .leaflet-control-attribution {
+            filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%);
+        }
+       
+        .leaflet-popup-content-wrapper { background: #0f172a; color: #f8fafc; border: 1px solid #334155; font-family: 'Plus Jakarta Sans', sans-serif;}
+        .leaflet-popup-tip { background: #0f172a; }
+        .marker-icon { border-radius: 50%; border: 2px solid white; box-shadow: 0 0 10px rgba(0,0,0,0.8); }
+        .reason-icon { font-size: 1.3rem; filter: drop-shadow(0px 2px 2px rgba(0,0,0,0.8)); text-align: center; }
+       
+        /* Map Legend (Lines instead of circles) */
+        .map-legend { position: absolute; top: 12px; right: 12px; z-index: 1000; background: rgba(15,23,42,0.9); padding: 12px; border-radius: 8px; border: 1px solid #334155; font-size: 0.75rem; font-weight: 600; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+       
+        /* LED Arrival Board Styles */
+        .led-board { font-family: 'VT323', monospace; background-color: #050505; border: 4px solid #1a1a1a; box-shadow: inset 0 0 20px #000; }
+        .led-text { color: #ff9900; text-shadow: 0 0 8px #ff9900; font-size: 1.3rem; letter-spacing: 0.05em; }
+        .led-header { color: #888; border-bottom: 2px dashed #333; padding-bottom: 8px; margin-bottom: 12px; }
+        .led-red { color: #ff3333; text-shadow: 0 0 8px #ff3333; }
+        .led-green { color: #33ff33; text-shadow: 0 0 8px #33ff33; }
+        .led-blue { color: #38bdf8; text-shadow: 0 0 8px #38bdf8; }
+        .view-btn { padding: 6px 12px; border-radius: 6px; font-weight: 600; text-sm; cursor: pointer; transition: all 0.2s; }
+        .view-btn.active { background-color: #38bdf8; color: #090d16; }
+        .view-btn.inactive { background-color: transparent; color: #94a3b8; border: 1px solid #334155; }
+    </style>
+</head>
+<body class="p-6 md:p-8">
+    <div class="max-w-7xl mx-auto space-y-6">
+        <header class="flex flex-col md:flex-row justify-between items-center border-b border-slate-800 pb-4">
+            <div>
+                <h1 class="text-3xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-sky-400 to-indigo-500">Dynamic ETA Forecast</h1>
+                <p class="text-slate-400 font-medium">SIH #26028 — Real-Time Predictive AI Network</p>
+            </div>
+           
+            <div class="flex items-center gap-4 mt-4 md:mt-0">
+                <div class="flex bg-slate-900 rounded-lg p-1 border border-slate-800">
+                    <button id="btnDashboard" onclick="switchView('dashboard')" class="view-btn active">Dashboard</button>
+                    <button id="btnLed" onclick="switchView('led')" class="view-btn inactive">Public LED Board</button>
+                </div>
+                <select id="trainSelect" class="bg-slate-900 text-white text-sm p-2 rounded-lg border border-slate-700 outline-none"></select>
+                <select id="dateSelect" class="bg-slate-900 text-white text-sm p-2 rounded-lg border border-slate-700 outline-none"></select>
+                <button id="analyzeBtn" onclick="loadJourney()" class="bg-sky-600 hover:bg-sky-500 text-white px-5 py-2 rounded-lg font-bold shadow-lg shadow-sky-900/50">Analyze</button>
+            </div>
+        </header>
 
-    // 2. Send form inputs to /api/journey for ETA prediction
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-     
-      const trainNumber = document.getElementById('train_number').value;
-      const simDate = document.getElementById('sim_date').value;
+        <div id="viewDashboard" class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div class="lg:col-span-2 space-y-4">
+                <div class="glass-card p-2 relative">
+                    <div id="map"></div>
+                   
+                    <div class="map-legend space-y-2">
+                        <div class="flex items-center"><span class="inline-block w-6 h-1.5 bg-emerald-500 rounded-sm mr-2"></span>Normal / On-time</div>
+                        <div class="flex items-center"><span class="inline-block w-6 h-1.5 bg-red-500 rounded-sm mr-2"></span>Route Congestion</div>
+                        <div class="flex items-center"><span class="inline-block w-6 h-1.5 bg-amber-500 rounded-sm mr-2"></span>Speed Restriction</div>
+                        <div class="flex items-center"><span class="inline-block w-6 h-1.5 bg-sky-500 rounded-sm mr-2"></span>Weather / Fog</div>
+                        <div class="flex items-center"><span class="inline-block w-6 h-1.5 bg-slate-400 rounded-sm mr-2"></span>Historical Delay</div>
+                    </div>
+                   
+                    <div class="absolute bottom-6 left-1/2 -translate-x-1/2 bg-slate-900/90 p-3 rounded-full border border-slate-700 flex items-center gap-4 z-[400] backdrop-blur-md shadow-2xl">
+                        <button id="playBtn" onclick="togglePlayback()" class="w-10 h-10 bg-sky-500 hover:bg-sky-400 text-white rounded-full flex justify-center items-center font-bold">▶</button>
+                        <input type="range" id="timeSlider" min="0" max="1000" value="0" class="w-64 accent-sky-500">
+                        <div class="text-sm font-bold text-sky-400 min-w-[80px] text-center" id="timeDisplay">13:00 PM</div>
+                    </div>
+                </div>
+                <div class="glass-card p-4">
+                    <div id="chartDiv" style="height: 350px;"></div>
+                </div>
+            </div>
 
-      submitBtn.disabled = true;
-      submitBtn.textContent = "Calculating ETA...";
-      resultDiv.style.display = "none";
+            <div class="space-y-6">
+                <div class="glass-card p-5 border-t-4 border-t-sky-500">
+                    <h3 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">Route Performance Analytics</h3>
+                    <div class="space-y-4">
+                        <div class="flex justify-between items-end border-b border-slate-800 pb-2">
+                            <span class="text-sm text-slate-300">Route Average Error (AI)</span>
+                            <div class="text-right">
+                                <span class="text-xl font-bold text-sky-400" id="routeMaeAI">--</span>
+                                <span class="text-xs text-slate-500 ml-1">min</span>
+                            </div>
+                        </div>
+                        <div class="flex justify-between items-end border-b border-slate-800 pb-2">
+                            <span class="text-sm text-slate-300">Route Average Error (Static)</span>
+                            <div class="text-right">
+                                <span class="text-xl font-bold text-amber-500" id="routeMaeStatic">--</span>
+                                <span class="text-xs text-slate-500 ml-1">min</span>
+                            </div>
+                        </div>
+                        <div class="flex justify-between items-end">
+                            <span class="text-sm text-slate-300">Peak Error Avoided</span>
+                            <div class="text-right">
+                                <span class="text-lg font-bold text-emerald-400" id="routePeakAvoided">--</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
 
-      try {
-        // Adjust request method (POST or GET) to match your api.py route
-        const response = await fetch(`${API_BASE_URL}/api/journey`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            train_number: trainNumber,
-            sim_date: simDate
-          })
-        });
+                <div class="glass-card p-5 h-[395px] flex flex-col">
+                    <h3 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">Live AI Diagnostics</h3>
+                    <div id="insightsFeed" class="flex-1 overflow-y-auto pr-2 space-y-3"></div>
+                </div>
+            </div>
+        </div>
 
-        if (!response.ok) throw new Error(`Server returned status ${response.status}`);
+        <div id="viewLed" class="hidden">
+            <div class="led-board p-8 rounded-xl min-h-[600px] overflow-hidden">
+                <div class="flex justify-between mb-4">
+                    <div class="text-2xl text-slate-400 font-sans tracking-widest font-bold">PASSENGER INFORMATION SYSTEM</div>
+                    <div class="text-xl text-red-500 font-sans font-bold animate-pulse">● LIVE AI FEED</div>
+                </div>
+               
+                <div class="grid grid-cols-5 led-text led-header font-bold text-lg">
+                    <div class="col-span-1">STATION</div>
+                    <div class="text-center">SCHEDULED</div>
+                    <div class="text-center">NTES (OLD)</div>
+                    <div class="text-center">AI ETA (NEW)</div>
+                    <div class="text-right">STATUS (AI)</div>
+                </div>
+               
+                <div id="ledBody" class="space-y-3"></div>
+            </div>
+        </div>
+    </div>
 
-        const data = await response.json();
-        resultDiv.textContent = "Prediction Results:\n" + JSON.stringify(data, null, 2);
-        resultDiv.style.display = "block";
-      } catch (error) {
-        console.error("Error predicting ETA:", error);
-        alert("Failed to calculate ETA. Check the browser console for details.");
-      } finally {
-        submitBtn.disabled = false;
-        submitBtn.textContent = "Calculate ETA";
-      }
-    });
+    <script>
+        const API_URL = "https://sih-eta-backend.onrender.com";
+        let journeyData = [];
+        let map, routeLayers = [], maxTime = 0;
+        let markerActual, markerAI, markerStatic;
+        let isPlaying = false, playInterval;
+        let originDate = new Date();
 
-    // Run initialization when page opens
-    initControls();
-  </script>
+        const createIcon = (color) => L.divIcon({ className: 'marker-icon', html: `<div style="background-color:${color}; width:100%; height:100%; border-radius:50%;"></div>`, iconSize: [16, 16] });
+
+        function switchView(view) {
+            if(view === 'dashboard') {
+                document.getElementById('viewDashboard').classList.remove('hidden');
+                document.getElementById('viewLed').classList.add('hidden');
+                document.getElementById('btnDashboard').className = 'view-btn active';
+                document.getElementById('btnLed').className = 'view-btn inactive';
+            } else {
+                document.getElementById('viewDashboard').classList.add('hidden');
+                document.getElementById('viewLed').classList.remove('hidden');
+                document.getElementById('btnDashboard').className = 'view-btn inactive';
+                document.getElementById('btnLed').className = 'view-btn active';
+            }
+        }
+
+        function initMap() {
+            map = L.map('map', {zoomControl: false}).setView([20.5937, 78.9629], 5);
+            L.control.zoom({position: 'topleft'}).addTo(map);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap' }).addTo(map);
+           
+            markerActual = L.marker([0,0], {icon: createIcon('#ef4444'), zIndexOffset: 1000}).bindTooltip("Actual Train").addTo(map);
+            markerAI = L.marker([0,0], {icon: createIcon('#10b981'), zIndexOffset: 900}).bindTooltip("AI Predicted ETA").addTo(map);
+            markerStatic = L.marker([0,0], {icon: createIcon('#f59e0b'), zIndexOffset: 800}).bindTooltip("Static NTES").addTo(map);
+        }
+
+        async function init() {
+            initMap();
+            try {
+                // FIXED ENDPOINT: Added /api prefix to match FastAPI route /api/controls
+                const res = await fetch(`${API_URL}/api/controls`);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+               
+                const trainSelect = document.getElementById('trainSelect');
+                trainSelect.innerHTML = '';
+                data.trains.forEach(t => trainSelect.add(new Option(t.label, t.id)));
+                trainSelect.value = data.trains.find(t => t.id.startsWith("12502"))?.id || data.trains[0].id;
+
+                const dateSelect = document.getElementById('dateSelect');
+                dateSelect.innerHTML = '';
+                data.dates.forEach(d => dateSelect.add(new Option(d, d)));
+                dateSelect.value = data.dates[Math.min(2, data.dates.length - 1)];
+
+                document.getElementById('timeSlider').addEventListener('input', (e) => updateMapPositions(parseInt(e.target.value)));
+                loadJourney();
+            } catch(e) {
+                console.error("API not reachable or waking up:", e);
+                const insightsFeed = document.getElementById('insightsFeed');
+                insightsFeed.innerHTML = `<div class="p-3 text-xs text-amber-400 bg-amber-950/40 rounded border border-amber-800/50">Backend container is waking up from free-tier sleep... Retrying automatically in 10s.</div>`;
+                setTimeout(init, 10000);
+            }
+        }
+
+        async function loadJourney() {
+            isPlaying = false; clearInterval(playInterval); document.getElementById('playBtn').innerText = "▶";
+           
+            const t = document.getElementById('trainSelect').value;
+            const d = document.getElementById('dateSelect').value;
+            if (!t || !d) return;
+
+            const analyzeBtn = document.getElementById('analyzeBtn');
+            analyzeBtn.innerText = "Loading...";
+            analyzeBtn.disabled = true;
+
+            try {
+                // FIXED ENDPOINT: Added /api prefix to match FastAPI route /api/journey
+                const res = await fetch(`${API_URL}/api/journey?train_number=${t}&sim_date=${d}`);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const payload = await res.json();
+               
+                if (payload.data) {
+                    journeyData = payload.data;
+                   
+                    // Set Origin Absolute Clock Time
+                    let depStr = payload.origin_departure || "13:00:00";
+                    if (depStr === "nan") depStr = "13:00:00";
+                    let parts = depStr.split(':');
+                    originDate.setHours(parseInt(parts[0]), parseInt(parts[1]), 0, 0);
+
+                    maxTime = Math.max(...journeyData.map(d => Math.max(d.Actual, d.AI_ETA, d.Static_ETA)));
+                    document.getElementById('timeSlider').max = maxTime;
+                   
+                    renderMapRoute();
+                    renderChart();
+                    renderAnalytics();
+                    renderInsights();
+                    renderLedBoard();
+                    updateMapPositions(0);
+                }
+            } catch(err) {
+                console.error("Error loading journey data:", err);
+                alert("Failed to fetch journey analytics from Render API. Please verify network status.");
+            } finally {
+                analyzeBtn.innerText = "Analyze";
+                analyzeBtn.disabled = false;
+            }
+        }
+
+        function formatMinsToTime(minsFromStart) {
+            let d = new Date(originDate.getTime() + minsFromStart * 60000);
+            return d.toLocaleTimeString('en-US', {hour: 'numeric', minute:'2-digit'});
+        }
+
+        function renderLedBoard() {
+            const container = document.getElementById('ledBody');
+            container.innerHTML = journeyData.slice(1).map(d => {
+                const aiDelay = d.AI_ETA - d.Scheduled;
+                let statusText = "ON TIME";
+                let statusClass = "led-green";
+               
+                if (aiDelay > 30) { statusText = "DELAYED"; statusClass = "led-red"; }
+                else if (aiDelay > 10) { statusText = "EXP. DELAY"; statusClass = "led-text"; }
+
+                const icons = (d.Has_TSR ? "⚠️" : "") + (d.Has_Fog ? "🌫️" : "") + (d.Has_Congestion ? "🚦" : "");
+               
+                return `
+                <div class="grid grid-cols-5 led-text border-b border-gray-900 pb-2">
+                    <div class="col-span-1 truncate pr-2">${d.Station.substring(0, 15)} ${icons}</div>
+                    <div class="text-center led-blue">${formatMinsToTime(d.Scheduled)}</div>
+                    <div class="text-center text-gray-500 line-through">${formatMinsToTime(d.Static_ETA)}</div>
+                    <div class="text-center led-text font-bold">${formatMinsToTime(d.AI_ETA)}</div>
+                    <div class="text-right ${statusClass}">${statusText}</div>
+                </div>`;
+            }).join('');
+        }
+
+        function renderMapRoute() {
+            routeLayers.forEach(l => map.removeLayer(l));
+            routeLayers = [];
+           
+            let allCoords = [];
+            for (let i = 0; i < journeyData.length - 1; i++) {
+                const p1 = journeyData[i], p2 = journeyData[i+1];
+                allCoords.push([p1.Lat, p1.Lng]);
+               
+                let segColor = '#10b981'; // Green (Normal)
+                if (p2.Primary_Reason === 'Congestion') segColor = '#ef4444';
+                else if (p2.Primary_Reason === 'TSR') segColor = '#f59e0b';
+                else if (p2.Primary_Reason === 'Weather') segColor = '#38bdf8';
+                else if (p2.Primary_Reason === 'Historical') segColor = '#94a3b8';
+               
+                const segment = L.polyline([[p1.Lat, p1.Lng], [p2.Lat, p2.Lng]], {color: segColor, weight: 5, opacity: 0.8}).addTo(map);
+                routeLayers.push(segment);
+            }
+           
+            const last = journeyData[journeyData.length-1];
+            allCoords.push([last.Lat, last.Lng]);
+            map.fitBounds(L.polyline(allCoords).getBounds(), {padding: [50, 50]});
+           
+            journeyData.forEach(d => {
+                const delay = d.Actual - d.Scheduled;
+                const dotColor = delay > 20 ? '#ef4444' : (delay > 5 ? '#f59e0b' : '#10b981');
+               
+                const dot = L.circleMarker([d.Lat, d.Lng], {radius: 5, color: '#0f172a', fillColor: dotColor, fillOpacity: 1, weight: 2})
+                 .bindPopup(`<div class="text-sm"><b>${d.Station}</b><br><span class="text-xs text-slate-400 mt-1 block">${d.Explanation}</span></div>`)
+                 .addTo(map);
+                routeLayers.push(dot);
+
+                let iconHtml = '';
+                if (d.Has_TSR) iconHtml += '⚠️';
+                if (d.Has_Fog) iconHtml += '🌫️';
+                if (d.Has_Congestion) iconHtml += '🚦';
+               
+                if (iconHtml !== '') {
+                    const iconMarker = L.divIcon({ className: 'reason-icon', html: iconHtml, iconSize: [30, 20], iconAnchor: [15, -10] });
+                    const rm = L.marker([d.Lat, d.Lng], {icon: iconMarker, interactive: false}).addTo(map);
+                    routeLayers.push(rm);
+                }
+            });
+        }
+
+        function interpolatePosition(time, timeKey) {
+            if (time <= journeyData[0][timeKey]) return [journeyData[0].Lat, journeyData[0].Lng];
+            if (time >= journeyData[journeyData.length-1][timeKey]) return [journeyData[journeyData.length-1].Lat, journeyData[journeyData.length-1].Lng];
+           
+            for (let i = 0; i < journeyData.length - 1; i++) {
+                const t1 = journeyData[i][timeKey], t2 = journeyData[i+1][timeKey];
+                if (time >= t1 && time <= t2) {
+                    const ratio = (time - t1) / (t2 - t1 || 1);
+                    const lat = journeyData[i].Lat + ratio * (journeyData[i+1].Lat - journeyData[i].Lat);
+                    const lng = journeyData[i].Lng + ratio * (journeyData[i+1].Lng - journeyData[i].Lng);
+                    return [lat, lng];
+                }
+            }
+            return [0,0];
+        }
+
+        function updateMapPositions(time) {
+            document.getElementById('timeSlider').value = time;
+            document.getElementById('timeDisplay').innerText = formatMinsToTime(time);
+            markerActual.setLatLng(interpolatePosition(time, "Actual"));
+            markerAI.setLatLng(interpolatePosition(time, "AI_ETA"));
+            markerStatic.setLatLng(interpolatePosition(time, "Static_ETA"));
+        }
+
+        function togglePlayback() {
+            const btn = document.getElementById('playBtn');
+            if (isPlaying) {
+                isPlaying = false; btn.innerText = "▶"; clearInterval(playInterval);
+            } else {
+                isPlaying = true; btn.innerText = "⏸";
+                let t = parseInt(document.getElementById('timeSlider').value);
+                if (t >= maxTime) t = 0;
+                playInterval = setInterval(() => {
+                    t += (maxTime / 300);
+                    if (t >= maxTime) { togglePlayback(); t = maxTime; }
+                    updateMapPositions(t);
+                }, 50);
+            }
+        }
+
+        function renderAnalytics() {
+            const enRoute = journeyData.slice(1);
+            if(!enRoute.length) return;
+            const avgStatic = enRoute.reduce((sum, row) => sum + row.Static_Error, 0) / enRoute.length;
+            const avgAI = enRoute.reduce((sum, row) => sum + row.AI_Error, 0) / enRoute.length;
+           
+            let peakDiscrepancy = 0;
+            enRoute.forEach(row => {
+                const gap = row.Static_Error - row.AI_Error;
+                if (gap > peakDiscrepancy) peakDiscrepancy = gap;
+            });
+           
+            document.getElementById('routeMaeAI').innerText = avgAI.toFixed(1);
+            document.getElementById('routeMaeStatic').innerText = avgStatic.toFixed(1);
+            document.getElementById('routePeakAvoided').innerText = `↓ ${peakDiscrepancy.toFixed(1)} min gap`;
+        }
+
+        function renderInsights() {
+            const feed = document.getElementById('insightsFeed');
+            feed.innerHTML = journeyData.slice(1).map(row => {
+                const isBetter = row.AI_Error < row.Static_Error;
+                const badges = (row.Has_TSR ? '<span title="Track Speed Restriction">⚠️</span> ' : '') +
+                               (row.Has_Fog ? '<span title="Weather Alert">🌫️</span> ' : '') +
+                               (row.Has_Congestion ? '<span title="Congestion Alert">🚦</span> ' : '');
+               
+                return `
+                <div class="bg-slate-900/50 p-3 rounded-lg border-l-4 ${isBetter ? 'border-emerald-500' : 'border-slate-600'} text-sm hover:bg-slate-800 transition-colors cursor-default">
+                    <div class="flex justify-between font-bold mb-1">
+                        <span class="text-slate-200">${row.Station} ${badges}</span>
+                        <span class="${isBetter ? 'text-emerald-400' : 'text-slate-400'}">${Math.abs(row.Static_Error - row.AI_Error).toFixed(1)}m gap</span>
+                    </div>
+                    <p class="text-slate-400 text-xs">${row.Explanation}</p>
+                </div>`;
+            }).join('');
+        }
+
+        function renderChart() {
+            const stations = journeyData.map(d => d.Station);
+            const customdata = journeyData.map(d => [formatMinsToTime(d.Scheduled), formatMinsToTime(d.Static_ETA), formatMinsToTime(d.AI_ETA), formatMinsToTime(d.Actual), d.Static_Error, d.AI_Error]);
+           
+            const hoverTemplate =
+                "<b>%{x}</b><br><br>" +
+                " Scheduled: <b>%{customdata[0]}</b><br>" +
+                " NTES Static: <b>%{customdata[1]}</b> (Err: %{customdata[4]:.1f}m)<br>" +
+                " AI Dynamic: <b>%{customdata[2]}</b> (Err: %{customdata[5]:.1f}m)<br>" +
+                " Actual: <b>%{customdata[3]}</b><extra></extra>";
+
+            const traces = [
+                { x: stations, y: journeyData.map(d => d.Scheduled), name: 'Scheduled', mode: 'lines', line: { dash: 'dash', color: '#64748b', width: 2 }, customdata, hovertemplate: hoverTemplate },
+                { x: stations, y: journeyData.map(d => d.Static_ETA), name: 'NTES Static', mode: 'lines+markers', line: { color: '#f59e0b', width: 3 }, marker: {size: 6}, customdata, hovertemplate: hoverTemplate },
+                { x: stations, y: journeyData.map(d => d.AI_ETA), name: 'AI Model', mode: 'lines+markers', line: { color: '#10b981', width: 3.5 }, marker: {size: 6}, customdata, hovertemplate: hoverTemplate },
+                { x: stations, y: journeyData.map(d => d.Actual), name: 'Actual', mode: 'lines+markers', line: { color: '#ef4444', width: 3.5 }, marker: {size: 6}, customdata, hovertemplate: hoverTemplate }
+            ];
+
+            Plotly.newPlot('chartDiv', traces, {
+                paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+                font: { color: '#94a3b8', family: '"Plus Jakarta Sans", sans-serif' },
+                margin: { t: 20, l: 40, r: 20, b: 60 }, hovermode: 'x unified',
+                hoverlabel: { bgcolor: '#0f172a', bordercolor: '#334155', font: { color: '#f8fafc', size: 13, family: '"Plus Jakarta Sans"' } },
+                xaxis: {
+                    gridcolor: '#1e293b',
+                    tickangle: 45,
+                    tickfont: {size: 10},
+                    nticks: Math.min(stations.length, 12),
+                    automargin: true
+                },
+                yaxis: { gridcolor: '#1e293b', title: 'Elapsed Minutes' },
+                legend: { orientation: 'h', y: 1.1, font: {color: '#e2e8f0'} }
+            }, {displayModeBar: false, responsive: true});
+        }
+
+        init();
+    </script>
 </body>
 </html>
