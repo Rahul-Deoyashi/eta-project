@@ -1,3 +1,16 @@
+from fastapi import FastAPI
+from fastapu.middleware.cors import CORSMiddleware
+
+app= FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+    allow_credentials=True,
+)   
+
 import os
 import json
 import pandas as pd
@@ -142,5 +155,5 @@ def get_journey(train_number: str, sim_date: str):
 
     return {
         "data": results,
-        "origin_departure": origin_dep
+        "origin_departure": origin_depx
     }
